@@ -71,11 +71,48 @@
     });
   }
 
+  // The control of the board that has the keyboard focus, so it can be
+  // given back after the board is drawn again (the old element is gone).
+  function focusDelTauler() {
+    var actiu = document.activeElement;
+    var targeta = actiu && tauler.contains(actiu) ? actiu.closest(".task-card") : null;
+    if (!targeta) {
+      return null;
+    }
+    return {
+      spec: targeta.dataset.spec,
+      control: actiu.matches("[data-mou]") ? "[data-mou]" : ".task-title",
+      // Only somebody moving with the keyboard is taken to the card; with a
+      // mouse the page stays where it is.
+      teclat: actiu.matches(":focus-visible")
+    };
+  }
+
+  function tornaElFocus(focus) {
+    if (!focus) {
+      return;
+    }
+    var targeta = tauler.querySelector('.task-card[data-spec="' + focus.spec + '"]');
+    if (!targeta || targeta.hidden) {
+      return;
+    }
+    // A card that can no longer be moved has no list: its title takes over.
+    var control = targeta.querySelector(focus.control);
+    if (!control || control.offsetParent === null) {
+      control = targeta.querySelector(".task-title");
+    }
+    if (control) {
+      control.focus({ preventScroll: !focus.teclat });
+    }
+  }
+
   function pinta(dades) {
+    var focus = focusDelTauler();
     tauler.innerHTML = dades.html;
     versio = dades.versio;
     aplicaEdicio();
     aplicaFiltre();
+    tornaElFocus(focus);
     if (aterrat) {
       var targeta = tauler.querySelector('.task-card[data-spec="' + aterrat.spec + '"]');
       if (targeta && !targeta.hidden) {
@@ -178,11 +215,23 @@
     envia(spec, "mou", { estat: estat });
   }
 
+  // When a "Mou a…" list was last touched: the automatic refresh waits a
+  // moment after it, so it does not close a list somebody has just opened.
+  var darrerUsDeLlista = 0;
+  ["pointerdown", "keydown"].forEach(function (tipus) {
+    tauler.addEventListener(tipus, function (event) {
+      if (event.target.closest("[data-mou]")) {
+        darrerUsDeLlista = Date.now();
+      }
+    });
+  });
+
   tauler.addEventListener("change", function (event) {
     var select = event.target.closest("[data-mou]");
     if (!select) {
       return;
     }
+    darrerUsDeLlista = 0; // The choice is made: nothing is open any more.
     var estat = select.value;
     select.value = "";
     mou(select.dataset.mou, estat);
@@ -678,7 +727,7 @@
   // never under the user's hands (while dragging or with a dialog open).
   if (interval > 0) {
     setInterval(function () {
-      if (document.hidden || ocupat() || modalMotiu.open) {
+      if (document.hidden || ocupat() || modalMotiu.open || Date.now() - darrerUsDeLlista < 15000) {
         return;
       }
       fetch(base + "/versio")
