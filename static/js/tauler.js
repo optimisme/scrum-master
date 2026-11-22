@@ -263,7 +263,20 @@
   }
 
   function aixeca(el, inici) {
-    var caixa = el.getBoundingClientRect();
+    // The card keeps the size it has in its column: lifting only scales it.
+    // A card pressed with the mouse is already drawn bigger, so its size is
+    // read from the layout, not from what is on screen, and it is placed
+    // around the same centre.
+    var dibuixada = el.getBoundingClientRect();
+    var mides = getComputedStyle(el);
+    var ample = parseFloat(mides.width);
+    var alt = parseFloat(mides.height);
+    var caixa = {
+      left: dibuixada.left + (dibuixada.width - ample) / 2,
+      top: dibuixada.top + (dibuixada.height - alt) / 2,
+      width: ample,
+      height: alt
+    };
     // The copy keeps the card's place in the column while the card itself
     // is carried above everything else.
     var ombra = el.cloneNode(true);
