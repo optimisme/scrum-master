@@ -2,9 +2,13 @@
 
 Tot el que decideix qui pot fer què amb una tasca és aquí, i les vistes només
 tradueixen peticions HTTP a aquestes funcions. Cada canvi afegeix una fila a
-l'historial (``TascaEvent``), que també serveix per saber si un tauler obert
-s'ha de refrescar.
+l'historial (``TascaEvent``).
+
+Llegir no escriu mai: les funcions que pinten pantalles no toquen la base de
+dades, i tota la neteja pendent es fa dins de les accions que ja hi escriuen.
 """
+
+import zlib
 
 from django.db import transaction
 from django.db.models import Count, Max
@@ -12,6 +16,8 @@ from django.utils import timezone
 
 from .models import (
     DoneSpec,
+    Spec,
+    Sprint,
     TascaBloqueig,
     TascaComentari,
     TascaEquip,
@@ -67,12 +73,66 @@ def transicions(tasca, rol_usuari):
     return _TRANSICIONS_MEMBRE[tasca.estat]
 
 
-def versio(equip):
-    """Canvia cada cop que passa alguna cosa al tauler de l'equip."""
+def pot_gestionar(usuari, projecte):
+    """Professorat del projecte i administració."""
+    return usuari.is_authenticated and (
+        usuari.is_superuser or projecte.admins.filter(pk=usuari.pk).exists()
+    )
+
+
+def pot_veure_insignies(usuari, projecte):
+    """Professorat sempre; alumnat del projecte si el projecte les mostra."""
+    if pot_gestionar(usuari, projecte):
+        return True
     return (
+        usuari.is_authenticated
+        and projecte.insignies_visibles
+        and projecte.equips.filter(membres=usuari).exists()
+    )
+
+
+def versio(equip):
+    """Empremta de tot el que es veu al tauler de l'equip.
+
+    Canvia quan passa alguna cosa al tauler (l'historial) i també quan canvia
+    allò que el tauler mostra però es gestiona en altres pantalles: les specs
+    del projecte, els seus sprints i mòduls, els membres de l'equip i les
+    qualificacions. Un tauler obert es torna a llegir quan l'empremta canvia.
+    """
+    projecte_id = equip.projecte_id
+    darrer = (
         TascaEvent.objects.filter(tasca__equip=equip).aggregate(v=Max("id"))["v"]
         or 0
     )
+    mostrat = [
+        list(
+            Spec.objects.filter(projecte_id=projecte_id)
+            .order_by("id")
+            .values_list("id", "nom", "ordre", "hores_estimades")
+        ),
+        list(
+            Spec.mp.through.objects.filter(spec__projecte_id=projecte_id)
+            .order_by("spec_id", "modulprofessional_id")
+            .values_list("spec_id", "modulprofessional_id")
+        ),
+        list(
+            Spec.sprints.through.objects.filter(spec__projecte_id=projecte_id)
+            .order_by("spec_id", "sprint_id")
+            .values_list("spec_id", "sprint_id")
+        ),
+        list(
+            Sprint.objects.filter(projecte_id=projecte_id)
+            .order_by("id")
+            .values_list("id", "nom")
+        ),
+        sorted(_ids_membres(equip)),
+        list(
+            DoneSpec.objects.filter(qualificacio__equip=equip)
+            .order_by("id")
+            .values_list("id", "percentatge")
+        ),
+    ]
+    return "{}-{:08x}".format(darrer, zlib.crc32(repr(mostrat).encode()))
 
 
 def obte_tasca(equip, spec, bloqueja=False):
@@ -99,6 +159,9 @@ def neteja_exmembres(equip):
 
     Les tasques finalitzades conserven qui les va fer, però les insígnies
     només compten les persones que formen part de l'equip ara.
+
+    Es crida des de les accions que escriuen, mai en pintar una pantalla:
+    mentrestant, ``dades_tauler`` ja mostra aquestes tasques sense responsable.
     """
     ids = _ids_membres(equip)
     orfes = (
@@ -134,6 +197,7 @@ def mou(equip, spec, usuari, rol_usuari, nou_estat, motiu=""):
     if nou_estat not in ESTATS:
         raise ErrorKanban("Estat desconegut.")
 
+    neteja_exmembres(equip)
     tasca = obte_tasca(equip, spec, bloqueja=True)
     actual = tasca.estat
     if nou_estat == actual:
@@ -176,9 +240,17 @@ def mou(equip, spec, usuari, rol_usuari, nou_estat, motiu=""):
             "Només la persona responsable pot enviar la tasca a «Test»."
         )
 
-    # De Test a Finalitzat ho valida una altra persona de l'equip, tret que
+    # Desbloquejar una tasca que ja estava finalitzada la torna tal com era:
+    # no es valida de nou, i es conserva qui la va validar i quan.
+    restaura = (
+        actual == BLOQUEJAT
+        and nou_estat == FINALITZAT
+        and tasca.finalitzada_el is not None
+    )
+
+    # A Finalitzat hi porta la tasca una altra persona de l'equip, tret que
     # l'equip sigui d'una sola persona.
-    if es_membre and actual == TEST and nou_estat == FINALITZAT and len(membres) > 1:
+    if es_membre and nou_estat == FINALITZAT and not restaura and len(membres) > 1:
         if usuari.pk in (tasca.responsable_id, tasca.enviada_a_test_per_id):
             raise ErrorKanban(
                 "No pots validar una tasca teva: l'ha de passar a "
@@ -202,9 +274,12 @@ def mou(equip, spec, usuari, rol_usuari, nou_estat, motiu=""):
         tasca.enviada_a_test_per = None
 
     if nou_estat == FINALITZAT:
-        tasca.finalitzada_el = timezone.now()
-        tasca.validada_per = usuari
-    else:
+        if not restaura:
+            tasca.finalitzada_el = timezone.now()
+            tasca.validada_per = usuari
+    elif not (nou_estat == BLOQUEJAT and actual == FINALITZAT):
+        # Una tasca finalitzada que es bloqueja conserva la validació, per
+        # poder-la restaurar en desbloquejar-la.
         tasca.finalitzada_el = None
         tasca.validada_per = None
 
@@ -226,6 +301,7 @@ def canvia_responsable(equip, spec, usuari, rol_usuari, nou):
     """Traspassa la tasca. ``nou`` és un usuari o ``None`` (només professorat)."""
     if rol_usuari not in (PROFE, MEMBRE):
         raise ErrorKanban("No tens permís per canviar la persona responsable.")
+    neteja_exmembres(equip)
     tasca = obte_tasca(equip, spec, bloqueja=True)
     membres = _ids_membres(equip)
 
@@ -259,6 +335,8 @@ def canvia_responsable(equip, spec, usuari, rol_usuari, nou):
 
 @transaction.atomic
 def canvia_colaborador(equip, spec, usuari, rol_usuari, persona, afegeix):
+    if rol_usuari in (PROFE, MEMBRE):
+        neteja_exmembres(equip)
     tasca = obte_tasca(equip, spec, bloqueja=True)
     if rol_usuari == MEMBRE and tasca.responsable_id != usuari.pk:
         raise ErrorKanban("Només la persona responsable gestiona els col·laboradors.")
@@ -291,6 +369,7 @@ def comenta(equip, spec, usuari, rol_usuari, text):
     text = (text or "").strip()
     if not text:
         raise ErrorKanban("El comentari no pot estar buit.")
+    neteja_exmembres(equip)
     tasca = obte_tasca(equip, spec, bloqueja=True)
     comentari = TascaComentari.objects.create(tasca=tasca, autor=usuari, text=text)
     _event(tasca, usuari, TascaEvent.COMENTARI)
@@ -300,7 +379,21 @@ def comenta(equip, spec, usuari, rol_usuari, text):
 # ---- Dades per pintar el tauler ---------------------------------------------
 
 
-def _percentatges_qualificats(equip):
+def responsable_vigent(tasca, membres):
+    """La persona responsable que es mostra.
+
+    Qui ha deixat l'equip ja no és responsable de les seves tasques obertes,
+    encara que la base de dades no s'actualitzi fins a la propera acció; de
+    les finalitzades, en canvi, es conserva qui les va fer.
+    """
+    if tasca.responsable_id is None:
+        return None
+    if tasca.estat == FINALITZAT or tasca.responsable_id in membres:
+        return tasca.responsable
+    return None
+
+
+def percentatges_qualificats(equip):
     """Percentatge que el professorat ha posat a cada spec (darrer sprint)."""
     resultat = {}
     done_specs = DoneSpec.objects.filter(qualificacio__equip=equip).order_by(
@@ -313,8 +406,8 @@ def _percentatges_qualificats(equip):
 
 def dades_tauler(equip, rol_usuari):
     """Columnes del tauler amb les seves targetes, a punt per a la plantilla."""
-    neteja_exmembres(equip)
     public = rol_usuari == PUBLIC
+    membres = _ids_membres(equip)
     specs = list(
         equip.projecte.specs.order_by("ordre", "id").prefetch_related("mp", "sprints")
     )
@@ -330,7 +423,7 @@ def dades_tauler(equip, rol_usuari):
             tasca__equip=equip, tancat_el__isnull=True
         )
     }
-    qualificats = {} if public else _percentatges_qualificats(equip)
+    qualificats = {} if public else percentatges_qualificats(equip)
 
     columnes = {estat: [] for estat in ESTATS}
     for spec in specs:
@@ -348,9 +441,14 @@ def dades_tauler(equip, rol_usuari):
             "finalitzada_el": tasca.finalitzada_el,
         }
         if not public:
+            vigent = responsable_vigent(tasca, membres)
             targeta.update(
-                responsable=tasca.responsable,
-                colaboradors=list(tasca.colaboradors.all()) if tasca.pk else [],
+                responsable=vigent,
+                colaboradors=[
+                    persona
+                    for persona in (tasca.colaboradors.all() if tasca.pk and vigent else [])
+                    if tasca.estat == FINALITZAT or persona.pk in membres
+                ],
                 n_comentaris=getattr(tasca, "n_comentaris", 0),
                 motiu=motius.get(tasca.pk, ""),
                 qualificat=qualificats.get(spec.id),
@@ -367,14 +465,22 @@ def dades_tauler(equip, rol_usuari):
     ]
 
 
-def progres(equip, total_specs=None):
-    """Nombre de tasques de l'equip a cada estat i percentatge finalitzat."""
+def progres(equip, total_specs=None, estats=None):
+    """Nombre de tasques de l'equip a cada estat i percentatge finalitzat.
+
+    ``estats`` és la llista d'estats de les tasques de l'equip, si qui crida
+    ja les ha llegit (pantalles amb molts equips); si no, es consulta.
+    """
     if total_specs is None:
         total_specs = equip.projecte.specs.count()
     comptes = {estat: 0 for estat in ESTATS}
-    del_projecte = equip.tasques.filter(spec__projecte=equip.projecte_id)
-    for fila in del_projecte.values("estat").annotate(n=Count("id")):
-        comptes[fila["estat"]] = fila["n"]
+    if estats is None:
+        del_projecte = equip.tasques.filter(spec__projecte=equip.projecte_id)
+        for fila in del_projecte.values("estat").annotate(n=Count("id")):
+            comptes[fila["estat"]] = fila["n"]
+    else:
+        for estat in estats:
+            comptes[estat] += 1
     comptes[PENDENT] = max(0, total_specs - sum(comptes[e] for e in ESTATS if e != PENDENT))
     percentatges = {
         estat: (comptes[estat] * 100 / total_specs if total_specs else 0)

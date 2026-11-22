@@ -729,7 +729,6 @@
       return;
     }
 
-    var arrossegada = null;
     var htmlInicial = "";
     var desant = false;
 
@@ -975,7 +974,6 @@
         return;
       }
       htmlInicial = contenidor.innerHTML;
-      arrossegada = fila;
 
       // Every spec (its row and, if it has one, its description row),
       // measured inside the box that holds the table.
@@ -1104,7 +1102,6 @@
       setTimeout(function () {
         neteja(acabat);
         drag = null;
-        arrossegada = null;
         reordena(acabat.items, acabat.from, a);
       }, senseMoviment ? 0 : GLIDE_MS);
     }

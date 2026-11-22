@@ -31,7 +31,9 @@
               {{ bloqueig.tasca.equip.projecte.nom }}<br>
               <a class="title" href="{% url 'tauler' bloqueig.tasca.equip.id %}">{{ bloqueig.tasca.equip.nom }}</a>
             </td>
-            <td>{{ bloqueig.tasca.spec.ordre }}. {{ bloqueig.tasca.spec.nom }}</td>
+            <td>
+              <a href="{% url 'tauler' bloqueig.tasca.equip.id %}#tasca-{{ bloqueig.tasca.spec.id }}">{{ bloqueig.tasca.spec.ordre }}. {{ bloqueig.tasca.spec.nom }}</a>
+            </td>
             <td>
               <div class="block-reason">{% icon "slash" %}<span>{{ bloqueig.motiu }}</span></div>
               <span class="muted">Bloquejada per {{ bloqueig.obert_per|nom_persona }}</span>

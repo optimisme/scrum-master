@@ -400,7 +400,12 @@ class TascaEventInline(_NomesLectura, admin.TabularInline):
 
 
 class TascaEquipAdmin(admin.ModelAdmin):
-    """Tauler Kanban: consulta de l'estat i de l'historial de cada tasca."""
+    """Tauler Kanban: consulta de l'estat i de l'historial de cada tasca.
+
+    Només de consulta: l'estat d'una tasca es canvia des del tauler, que és
+    on s'apliquen les regles i s'escriu l'historial. Es poden esborrar, perquè
+    cal per poder esborrar la spec o l'equip a què pertanyen.
+    """
 
     model = TascaEquip
     list_display = ("spec", "equip", "estat", "responsable", "finalitzada_el")
@@ -410,6 +415,12 @@ class TascaEquipAdmin(admin.ModelAdmin):
     raw_id_fields = ("equip", "spec", "responsable", "enviada_a_test_per", "validada_per")
     filter_horizontal = ("colaboradors",)
     inlines = [TascaBloqueigInline, TascaComentariInline, TascaEventInline]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 class UserAdmin(BaseUserAdmin):

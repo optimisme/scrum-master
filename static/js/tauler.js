@@ -10,7 +10,7 @@
   }
 
   var base = tauler.dataset.base; // …/equips/<id>/tauler
-  var versio = Number(tauler.dataset.versio) || 0;
+  var versio = tauler.dataset.versio || "";
   var interval = Number(tauler.dataset.interval) || 0;
   var potEditar = tauler.dataset.potEditar === "1";
   var esProfe = tauler.dataset.esProfe === "1";
@@ -140,6 +140,9 @@
       .then(function (dades) {
         if (!dades.ok) {
           UI.toast(dades.error || "No s'ha pogut fer l'acció.", "error");
+          // A refusal usually means the board on screen is out of date
+          // (somebody else moved the task): read it again.
+          refresca();
           return false;
         }
         pinta(dades);
@@ -170,6 +173,9 @@
   // Asks why a task is blocked. Resolves with the reason, or with null when
   // the form is closed without giving one.
   function demanaMotiu() {
+    if (modalMotiu.open) {
+      return Promise.resolve(null); // Already asking for another task.
+    }
     return new Promise(function (resol) {
       var resolt = false;
       function acaba(valor) {
@@ -655,12 +661,8 @@
       });
   }
 
-  tauler.addEventListener("click", function (event) {
-    var boto = event.target.closest("[data-obre-tasca]");
-    if (!boto) {
-      return;
-    }
-    specOberta = boto.dataset.obreTasca;
+  function obreTasca(spec) {
+    specOberta = spec;
     pestanya = "descripcio";
     carregaTasca(specOberta).then(function () {
       UI.openModal(modalTasca, function () {
@@ -668,7 +670,21 @@
         contingut.innerHTML = "";
       });
     });
+  }
+
+  tauler.addEventListener("click", function (event) {
+    var boto = event.target.closest("[data-obre-tasca]");
+    if (boto) {
+      obreTasca(boto.dataset.obreTasca);
+    }
   });
+
+  // A link to one task of this board (from the progress matrix or the list
+  // of blocked tasks) ends in #tasca-<id>: its dialog opens straight away.
+  var enllacada = /^#tasca-(\d+)$/.exec(window.location.hash);
+  if (enllacada && tauler.querySelector('.task-card[data-spec="' + enllacada[1] + '"]')) {
+    obreTasca(enllacada[1]);
+  }
 
   contingut.addEventListener("click", function (event) {
     var tab = event.target.closest("[data-tab]");
@@ -717,7 +733,17 @@
     });
   }
   if (edicio) {
-    edicio.addEventListener("change", aplicaEdicio);
+    // Remembered while the browser tab lives, like the sprint filter, so a
+    // teacher correcting several things does not switch it on at every load.
+    try {
+      edicio.checked = sessionStorage.getItem("tauler-edicio:" + base) === "1";
+    } catch (error) { /* storage may be unavailable */ }
+    edicio.addEventListener("change", function () {
+      try {
+        sessionStorage.setItem("tauler-edicio:" + base, edicio.checked ? "1" : "");
+      } catch (error) { /* ignore */ }
+      aplicaEdicio();
+    });
   }
 
   aplicaEdicio();

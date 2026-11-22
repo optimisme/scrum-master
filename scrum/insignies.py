@@ -215,12 +215,11 @@ def calcula(membres, finalitzades, moduls_projecte):
     return llista
 
 
-def de_l_equip(equip, moduls_projecte=None):
-    """Llegeix de la base de dades el que cal i calcula les insígnies."""
-    projecte = equip.projecte
-    if moduls_projecte is None:
-        moduls_projecte = len(projecte.mps())
-    membres = set(equip.membres.values_list("pk", flat=True))
+def de_tasques(membres, tasques, moduls_projecte):
+    """Insígnies a partir de tasques finalitzades ja llegides.
+
+    ``tasques`` han de portar precarregats ``spec__mp`` i ``colaboradors``.
+    """
     finalitzades = [
         {
             "responsable": tasca.responsable_id,
@@ -228,10 +227,19 @@ def de_l_equip(equip, moduls_projecte=None):
             "moduls": {mp.pk for mp in tasca.spec.mp.all()},
             "sola": not tasca.colaboradors.all(),
         }
-        for tasca in equip.tasques.filter(
-            estat=FINALITZAT, spec__projecte=equip.projecte_id
-        )
-        .select_related("spec")
-        .prefetch_related("spec__mp", "colaboradors")
+        for tasca in tasques
     ]
     return calcula(membres, finalitzades, moduls_projecte)
+
+
+def de_l_equip(equip, moduls_projecte=None):
+    """Llegeix de la base de dades el que cal i calcula les insígnies."""
+    if moduls_projecte is None:
+        moduls_projecte = len(equip.projecte.mps())
+    membres = set(equip.membres.values_list("pk", flat=True))
+    tasques = (
+        equip.tasques.filter(estat=FINALITZAT, spec__projecte=equip.projecte_id)
+        .select_related("spec")
+        .prefetch_related("spec__mp", "colaboradors")
+    )
+    return de_tasques(membres, tasques, moduls_projecte)

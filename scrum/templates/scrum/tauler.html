@@ -34,6 +34,9 @@
       {% for membre in membres %}{{ membre|nom_persona }}{% if not forloop.last %}, {% endif %}{% empty %}cap{% endfor %}
     </span>
   {% endif %}
+  {% if pot_editar %}
+    <span class="touch-hint">Mantén premuda una targeta per arrossegar-la.</span>
+  {% endif %}
   <span class="grow"></span>
   {% if sprints %}
     <label class="inline-field">
@@ -55,6 +58,13 @@
     </label>
   {% endif %}
 </div>
+
+{% if sense_tasques %}
+  <p class="notice">
+    Aquest projecte encara no té cap spec, així que el tauler és buit. Les specs
+    s'afegeixen des de «Edita el projecte».
+  </p>
+{% endif %}
 
 <div id="tauler"
      class="board{% if es_profe %} nomes-lectura{% endif %}"

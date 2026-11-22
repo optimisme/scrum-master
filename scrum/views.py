@@ -19,7 +19,7 @@ from odf.style import Style, TableCellProperties, TextProperties
 from odf.table import Table, TableCell, TableRow
 from odf.text import P
 
-from . import views_kanban
+from . import kanban
 from .forms import ProjecteDescripcioForm, SpecDescripcioForm
 from .models import (
     Centre,
@@ -309,10 +309,8 @@ def projecte(request, id):
             "toggled_comment": toggled_comment,
             "activa_comentaris": activa_comentaris,
             "equips": projecte.equips.order_by("nom", "id"),
-            "pot_gestionar": views_kanban._pot_gestionar(request.user, projecte),
-            "mostra_insignies": views_kanban._pot_veure_insignies(
-                request.user, projecte
-            ),
+            "pot_gestionar": kanban.pot_gestionar(request.user, projecte),
+            "mostra_insignies": kanban.pot_veure_insignies(request.user, projecte),
         },
     )
 

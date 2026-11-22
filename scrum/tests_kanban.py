@@ -188,6 +188,32 @@ class EstatsTests(BaseKanban):
         self.mou(self.profe, kanban.PENDENT, rol=kanban.PROFE)
         self.assertIsNone(self.tasca().finalitzada_el)
 
+    def test_desbloquejar_una_finalitzada_no_la_torna_a_validar(self):
+        self.finalitza(self.spec, self.anna, self.biel)
+        validada = self.tasca().finalitzada_el
+        self.mou(self.profe, kanban.BLOQUEJAT, motiu="Cal revisar-la", rol=kanban.PROFE)
+        self.assertEqual(self.tasca().validada_per, self.biel)
+        # La persona responsable la pot desbloquejar, però no queda com si
+        # l'hagués validada ella: es restaura la validació que ja tenia.
+        self.mou(self.anna, kanban.FINALITZAT)
+        tasca = self.tasca()
+        self.assertEqual(tasca.estat, kanban.FINALITZAT)
+        self.assertEqual(tasca.validada_per, self.biel)
+        self.assertEqual(tasca.finalitzada_el, validada)
+
+    def test_sense_validacio_previa_no_es_pot_finalitzar_la_tasca_propia(self):
+        # Finalitzada pel professorat sense responsable, després bloquejada i
+        # assumida per l'Anna: desbloquejar-la no pot ser una autovalidació.
+        self.mou(self.anna, kanban.EN_CURS)
+        self.mou(self.profe, kanban.BLOQUEJAT, motiu="x", rol=kanban.PROFE)
+        TascaEquip.objects.filter(pk=self.tasca().pk).update(
+            estat_abans_bloqueig=kanban.FINALITZAT
+        )
+        with self.assertRaises(kanban.ErrorKanban):
+            self.mou(self.anna, kanban.FINALITZAT)
+        self.mou(self.biel, kanban.FINALITZAT)
+        self.assertEqual(self.tasca().validada_per, self.biel)
+
     def test_reobrir_una_tasca_finalitzada(self):
         self.finalitza(self.spec, self.anna, self.biel)
         self.mou(self.carla, kanban.EN_CURS)
@@ -246,15 +272,45 @@ class PersonesTests(BaseKanban):
         self.mou(self.anna, kanban.EN_CURS)
         self.finalitza(self.specs[1], self.anna, self.biel)
         self.equip.membres.remove(self.anna)
-        kanban.dades_tauler(self.equip, kanban.MEMBRE)
-        self.assertIsNone(self.tasca().responsable)
-        # La feina acabada conserva qui la va fer.
-        self.assertEqual(self.tasca(self.specs[1]).responsable, self.anna)
-        # Una persona de l'equip pot assumir la tasca que ha quedat òrfena.
+        abans = TascaEvent.objects.count()
+
+        # Al tauler ja no surt com a responsable de la tasca oberta...
+        columnes = kanban.dades_tauler(self.equip, kanban.MEMBRE)
+        targetes = {t["spec"].id: t for c in columnes for t in c["targetes"]}
+        self.assertIsNone(targetes[self.spec.id]["responsable"])
+        # ...però de la finalitzada es conserva qui la va fer.
+        self.assertEqual(targetes[self.specs[1].id]["responsable"], self.anna)
+        # Pintar el tauler no escriu res a la base de dades.
+        self.assertEqual(TascaEvent.objects.count(), abans)
+        self.assertEqual(self.tasca().responsable, self.anna)
+
+        # Una persona de l'equip pot assumir la tasca que ha quedat òrfena, i
+        # és aquesta acció la que deixa constància del canvi a l'historial.
         kanban.canvia_responsable(
             self.equip, self.spec, self.biel, kanban.MEMBRE, self.biel
         )
         self.assertEqual(self.tasca().responsable, self.biel)
+        self.assertTrue(
+            self.tasca().events.filter(text__contains="ja no forma part").exists()
+        )
+        self.assertEqual(self.tasca(self.specs[1]).responsable, self.anna)
+
+    def test_veure_pantalles_no_escriu_a_la_base_de_dades(self):
+        self.mou(self.anna, kanban.EN_CURS)
+        self.equip.membres.remove(self.anna)
+        abans = (TascaEvent.objects.count(), self.tasca().responsable_id)
+        self.client.logout()
+        self.assertEqual(self.client.get(self.url("tauler")).status_code, 200)
+        self.assertEqual(self.client.get(self.url("tasca_detall")).status_code, 200)
+        self.entra(self.biel)
+        resposta = self.client.get(self.url("tauler"))
+        self.assertNotContains(resposta, "Anna Prova")
+        self.assertContains(resposta, "Sense responsable")
+        self.assertContains(self.client.get(self.url("tasca_detall")), "Assumeix la tasca")
+        self.client.get(reverse("insignies_projecte", args=[self.projecte.id]))
+        self.assertEqual(
+            (TascaEvent.objects.count(), self.tasca().responsable_id), abans
+        )
 
     def test_comentaris_de_seguiment(self):
         with self.assertRaises(kanban.ErrorKanban):
@@ -348,7 +404,62 @@ class VistesTests(BaseKanban):
         versio = reverse("tauler_versio", args=[self.equip.id])
         abans = self.client.get(versio).json()["versio"]
         self.mou(self.anna, kanban.EN_CURS)
-        self.assertGreater(self.client.get(versio).json()["versio"], abans)
+        self.assertNotEqual(self.client.get(versio).json()["versio"], abans)
+
+    def test_el_tauler_es_refresca_amb_canvis_fets_en_altres_pantalles(self):
+        vistes = [kanban.versio(self.equip)]
+
+        def ha_canviat():
+            vistes.append(kanban.versio(self.equip))
+            return vistes[-1] != vistes[-2]
+
+        self.assertFalse(ha_canviat())  # Sense canvis, la mateixa empremta.
+        self.spec.nom = "Un altre nom"
+        self.spec.save()
+        self.assertTrue(ha_canviat())
+        nova = Spec.objects.create(nom="Nova", projecte=self.projecte, ordre=99)
+        self.assertTrue(ha_canviat())
+        nova.sprints.add(self.sprint)
+        self.assertTrue(ha_canviat())
+        nova.mp.add(self.mp1)
+        self.assertTrue(ha_canviat())
+        self.equip.membres.remove(self.carla)
+        self.assertTrue(ha_canviat())
+        qualificacio = Qualificacio.objects.create(equip=self.equip, sprint=self.sprint)
+        done = DoneSpec.objects.create(qualificacio=qualificacio, spec=self.spec)
+        self.assertTrue(ha_canviat())
+        done.percentatge = 75
+        done.save()
+        self.assertTrue(ha_canviat())
+        # El que passa en un altre projecte no fa refrescar aquest tauler.
+        altre = Projecte.objects.create(
+            nom="Altre", inici=self.projecte.inici, final=self.projecte.final
+        )
+        Spec.objects.create(nom="Aliena", projecte=altre, ordre=1)
+        self.assertFalse(ha_canviat())
+
+    def test_tauler_sense_specs_ho_explica(self):
+        buit = Projecte.objects.create(
+            nom="Buit", inici=self.projecte.inici, final=self.projecte.final
+        )
+        equip = Equip.objects.create(nom="Equip buit", projecte=buit)
+        resposta = self.client.get(reverse("tauler", args=[equip.id]))
+        self.assertContains(resposta, "encara no té cap spec")
+        self.assertNotContains(
+            self.client.get(self.url("tauler")), "encara no té cap spec"
+        )
+
+    def test_l_administracio_nomes_consulta_les_tasques(self):
+        from django.contrib import admin
+
+        model_admin = admin.site._registry[TascaEquip]
+        peticio = self.client.get("/").wsgi_request
+        peticio.user = User.objects.create_superuser(
+            username="root", email="root@example.cat", password="x"
+        )
+        self.assertFalse(model_admin.has_add_permission(peticio))
+        self.assertFalse(model_admin.has_change_permission(peticio))
+        self.assertTrue(model_admin.has_view_permission(peticio))
 
     def test_matriu_i_bloquejades_nomes_per_al_professorat(self):
         self.mou(self.anna, kanban.EN_CURS)
@@ -359,10 +470,40 @@ class VistesTests(BaseKanban):
         self.assertEqual(self.client.get(matriu).status_code, 404)
         self.assertEqual(self.client.get(bloquejades).status_code, 404)
         self.entra(self.profe)
-        self.assertContains(self.client.get(matriu), "Equip Alfa")
+        enllac = "{}#tasca-{}".format(self.url("tauler"), self.spec.id)
+        resposta = self.client.get(matriu)
+        self.assertContains(resposta, "Equip Alfa")
+        # Cada casella porta a la seva tasca, al tauler de l'equip.
+        self.assertContains(resposta, 'href="{}"'.format(enllac))
         resposta = self.client.get(bloquejades)
         self.assertContains(resposta, "Sense connexió")
         self.assertContains(resposta, "Tasca 1")
+        self.assertContains(resposta, 'href="{}"'.format(enllac))
+
+    def test_insignies_i_matriu_no_fan_mes_consultes_amb_mes_equips(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self.finalitza(self.spec, self.anna, self.biel)
+        self.entra(self.profe)
+
+        def consultes(nom):
+            with CaptureQueriesContext(connection) as captura:
+                self.client.get(reverse(nom, args=[self.projecte.id]))
+            return len(captura)
+
+        abans = {nom: consultes(nom) for nom in ("insignies_projecte", "matriu_projecte")}
+        for numero in range(4):
+            equip = Equip.objects.create(
+                nom="Equip {}".format(numero), projecte=self.projecte
+            )
+            persones = [_usuari("p{}{}".format(numero, k)) for k in range(3)]
+            equip.membres.set(persones)
+            kanban.mou(equip, self.spec, persones[0], kanban.MEMBRE, kanban.EN_CURS)
+            kanban.mou(equip, self.spec, persones[0], kanban.MEMBRE, kanban.TEST)
+            kanban.mou(equip, self.spec, persones[1], kanban.MEMBRE, kanban.FINALITZAT)
+        for nom, valor in abans.items():
+            self.assertEqual(consultes(nom), valor, nom)
 
     def test_el_projecte_enllaca_els_taulers(self):
         resposta = self.client.get(reverse("projecte", args=[self.projecte.id]))

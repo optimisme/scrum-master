@@ -33,23 +33,6 @@ def _spec(equip, spec_id):
     return get_object_or_404(Spec, pk=spec_id, projecte=equip.projecte_id)
 
 
-def _pot_gestionar(usuari, projecte):
-    return usuari.is_authenticated and (
-        usuari.is_superuser or projecte.admins.filter(pk=usuari.pk).exists()
-    )
-
-
-def _pot_veure_insignies(usuari, projecte):
-    """Professorat sempre; alumnat del projecte si el projecte les mostra."""
-    if _pot_gestionar(usuari, projecte):
-        return True
-    return (
-        usuari.is_authenticated
-        and projecte.insignies_visibles
-        and projecte.equips.filter(membres=usuari).exists()
-    )
-
-
 def _context_columnes(equip, rol):
     return {
         "equip": equip,
@@ -88,7 +71,8 @@ def tauler(request, equip_id):
         versio=kanban.versio(equip),
         interval=settings.KANBAN_POLL_SECONDS,
         es_profe=rol == kanban.PROFE,
-        mostra_insignies=_pot_veure_insignies(request.user, equip.projecte),
+        mostra_insignies=kanban.pot_veure_insignies(request.user, equip.projecte),
+        sense_tasques=not any(columna["targetes"] for columna in context["columnes"]),
     )
     return render(request, "scrum/tauler.html", context)
 
@@ -113,6 +97,12 @@ def tasca_detall(request, equip_id, spec_id):
         .select_related("responsable")
         .first()
     ) or TascaEquip(equip=equip, spec=spec)
+
+    # Qui ha deixat l'equip ja no es mostra com a responsable (vegeu
+    # kanban.responsable_vigent). Només canvia el que es pinta: no es desa.
+    ids_membres = set(equip.membres.values_list("pk", flat=True))
+    if kanban.responsable_vigent(tasca, ids_membres) is None:
+        tasca.responsable = None
 
     context = {
         "equip": equip,
@@ -145,7 +135,7 @@ def tasca_detall(request, equip_id, spec_id):
             events=list(
                 tasca.events.select_related("usuari", "afectat").order_by("-creat_el", "-id")
             ) if tasca.pk else [],
-            qualificat=kanban._percentatges_qualificats(equip).get(spec.id),
+            qualificat=kanban.percentatges_qualificats(equip).get(spec.id),
             es_profe=es_profe,
             # Traspassar: la persona responsable (no mentre és a Test) o el professorat.
             pot_traspassar=es_profe
@@ -239,24 +229,35 @@ def tasca_comentari(request, equip_id, spec_id):
 @login_required
 def insignies_projecte(request, projecte_id):
     projecte = get_object_or_404(Projecte, pk=projecte_id)
-    if not _pot_veure_insignies(request.user, projecte):
+    if not kanban.pot_veure_insignies(request.user, projecte):
         raise Http404("Les insígnies d'aquest projecte no són visibles.")
 
-    pot_gestionar = _pot_gestionar(request.user, projecte)
+    pot_gestionar = kanban.pot_gestionar(request.user, projecte)
     total_specs = projecte.specs.count()
     moduls_projecte = len(projecte.mps())
-    meus = set(
-        projecte.equips.filter(membres=request.user).values_list("pk", flat=True)
+    # Totes les tasques del projecte en una sola lectura, repartides per equip.
+    per_equip = {}
+    tasques = (
+        TascaEquip.objects.filter(equip__projecte=projecte, spec__projecte=projecte)
+        .select_related("spec")
+        .prefetch_related("spec__mp", "colaboradors")
     )
+    for tasca in tasques:
+        per_equip.setdefault(tasca.equip_id, []).append(tasca)
 
     files = []
-    for equip in projecte.equips.order_by("nom", "id"):
-        kanban.neteja_exmembres(equip)
-        fila = kanban.progres(equip, total_specs)
+    for equip in projecte.equips.order_by("nom", "id").prefetch_related("membres"):
+        membres = {membre.pk for membre in equip.membres.all()}
+        seves = per_equip.get(equip.pk, [])
+        fila = kanban.progres(equip, total_specs, [tasca.estat for tasca in seves])
         fila.update(
             equip=equip,
-            meu=equip.pk in meus,
-            insignies=insignies.de_l_equip(equip, moduls_projecte),
+            meu=request.user.pk in membres,
+            insignies=insignies.de_tasques(
+                membres,
+                [tasca for tasca in seves if tasca.estat == kanban.FINALITZAT],
+                moduls_projecte,
+            ),
         )
         fila["aconseguides"] = sum(1 for i in fila["insignies"] if i["aconseguida"])
         fila["possibles"] = sum(1 for i in fila["insignies"] if not i["no_disponible"])
@@ -284,18 +285,23 @@ def insignies_projecte(request, projecte_id):
 def matriu_projecte(request, projecte_id):
     """Estat de cada tasca a cada equip, en una sola taula."""
     projecte = get_object_or_404(Projecte, pk=projecte_id)
-    if not _pot_gestionar(request.user, projecte):
+    if not kanban.pot_gestionar(request.user, projecte):
         raise Http404
     specs = list(projecte.specs.order_by("ordre", "id"))
+    # L'estat de totes les tasques del projecte en una sola lectura.
+    per_equip = {}
+    for equip_id, spec_id, estat in TascaEquip.objects.filter(
+        equip__projecte=projecte, spec__projecte=projecte
+    ).values_list("equip_id", "spec_id", "estat"):
+        per_equip.setdefault(equip_id, {})[spec_id] = estat
+
     files = []
-    for equip in projecte.equips.order_by("nom", "id").prefetch_related("membres"):
-        estats = dict(
-            equip.tasques.filter(spec__projecte=projecte).values_list("spec_id", "estat")
-        )
+    for equip in projecte.equips.order_by("nom", "id"):
+        estats = per_equip.get(equip.pk, {})
         files.append(
             {
                 "equip": equip,
-                "progres": kanban.progres(equip, len(specs)),
+                "progres": kanban.progres(equip, len(specs), list(estats.values())),
                 "celles": [
                     {
                         "spec": spec,

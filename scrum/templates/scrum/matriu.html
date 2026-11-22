@@ -10,7 +10,7 @@
   <div class="titles">
     <p class="breadcrumb"><a href="{% url 'els_meus_projectes' %}">Els meus projectes</a> / {{ projecte.nom }}</p>
     <h1>Matriu de progrés</h1>
-    <p class="muted">L'estat de cada tasca al tauler de cada equip. Fes clic en un equip per obrir-ne el tauler.</p>
+    <p class="muted">L'estat de cada tasca al tauler de cada equip. Fes clic en un equip per obrir-ne el tauler, o en una casella per obrir-ne la tasca.</p>
   </div>
   <div class="actions">
     <a class="btn" href="{% url 'insignies_projecte' projecte.id %}">{% icon "award" %}Insígnies</a>
@@ -49,9 +49,11 @@
             </th>
             {% for cella in fila.celles %}
               <td>
-                <span class="cell {{ cella.estat }}" title="{{ cella.spec.ordre }}. {{ cella.spec.nom }}: {{ cella.nom_estat }}">
-                  {% estat_icon cella.estat %}<span class="sr-only">{{ cella.nom_estat }}</span>
-                </span>
+                <a class="cell {{ cella.estat }}"
+                   href="{% url 'tauler' fila.equip.id %}#tasca-{{ cella.spec.id }}"
+                   title="{{ cella.spec.ordre }}. {{ cella.spec.nom }}: {{ cella.nom_estat }}">
+                  {% estat_icon cella.estat %}<span class="sr-only">{{ cella.spec.ordre }}. {{ cella.spec.nom }}: {{ cella.nom_estat }}</span>
+                </a>
               </td>
             {% endfor %}
           </tr>
