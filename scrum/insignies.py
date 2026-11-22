@@ -14,7 +14,7 @@ import math
 from .kanban import FINALITZAT
 
 # Fins on es pot allunyar una persona d'un repartiment a parts iguals: un 15%,
-# i mai menys d'una tasca (o de les hores d'una tasca mitjana), perquè les
+# i mai menys d'una tasca, perquè les
 # tasques són senceres i els equips petits.
 MARGE = 0.15
 MIN_COBERTURA_MODULS = 0.5  # dels mòduls que ha treballat l'equip
@@ -26,7 +26,7 @@ DEFINICIONS = [
     {
         "clau": "tothom_tasques",
         "icona": "🙌",
-        "nom": "Tothom treballa · tasques",
+        "nom": "Tothom treballa",
         "com": (
             "Ningú no ha finalitzat menys tasques de les que li tocarien a "
             "parts iguals, amb un marge del 15% (com a mínim, d'una tasca). "
@@ -34,30 +34,12 @@ DEFINICIONS = [
         ),
     },
     {
-        "clau": "tothom_hores",
-        "icona": "⏱️",
-        "nom": "Tothom treballa · hores",
-        "com": (
-            "Com l'anterior, però comptant les hores estimades de les tasques "
-            "en lloc del nombre de tasques."
-        ),
-    },
-    {
         "clau": "repartida_tasques",
         "icona": "⚖️",
-        "nom": "Feina ben repartida · tasques",
+        "nom": "Feina ben repartida",
         "com": (
             "Ningú no ha finalitzat més tasques de les que li tocarien a "
             "parts iguals, amb un marge del 15% (com a mínim, d'una tasca)."
-        ),
-    },
-    {
-        "clau": "repartida_hores",
-        "icona": "🧮",
-        "nom": "Feina ben repartida · hores",
-        "com": (
-            "Com l'anterior, però comptant les hores estimades de les tasques "
-            "en lloc del nombre de tasques."
         ),
     },
     {
@@ -94,7 +76,6 @@ NO_DISPONIBLE = {
     "equip": "Només per a equips de dues persones o més.",
     "equip_revisio": "Només per a equips de tres persones o més.",
     "moduls": "El projecte necessita almenys dos mòduls professionals.",
-    "hores": "Les tasques del projecte no tenen hores estimades.",
 }
 
 
@@ -102,20 +83,16 @@ def _tasques(n):
     return "{} {}".format(n, "tasca" if n == 1 else "tasques")
 
 
-def _hores(valor):
-    return "{:g} h".format(round(valor, 1))
-
-
 def _percent(fraccio):
     return "{}%".format(round(fraccio * 100))
 
 
-def calcula(membres, finalitzades, moduls_projecte, hores_projecte):
+def calcula(membres, finalitzades, moduls_projecte):
     """Insígnies d'un equip.
 
     ``membres``: ids de les persones que són a l'equip ara.
     ``finalitzades``: una entrada per tasca finalitzada, amb ``responsable``
-    (id), ``validada_per`` (id o None), ``hores``, ``moduls`` (conjunt d'ids)
+    (id), ``validada_per`` (id o None), ``moduls`` (conjunt d'ids)
     i ``sola`` (sense col·laboradors).
     """
     ids = list(membres)
@@ -124,13 +101,12 @@ def calcula(membres, finalitzades, moduls_projecte, hores_projecte):
     propies = [t for t in finalitzades if t["responsable"] in membres]
 
     per_persona = {
-        pk: {"n": 0, "hores": 0.0, "soles": 0, "moduls": set(), "validades": 0, "validables": 0}
+        pk: {"n": 0, "soles": 0, "moduls": set(), "validades": 0, "validables": 0}
         for pk in ids
     }
     for tasca in propies:
         dades = per_persona[tasca["responsable"]]
         dades["n"] += 1
-        dades["hores"] += tasca["hores"]
         dades["soles"] += 1 if tasca["sola"] else 0
         dades["moduls"] |= tasca["moduls"]
         # Validacions fetes per membres: les del professorat no compten.
@@ -141,7 +117,6 @@ def calcula(membres, finalitzades, moduls_projecte, hores_projecte):
                     per_persona[pk]["validables"] += 1
 
     total = len(propies)
-    total_hores = sum(t["hores"] for t in propies)
     moduls_equip = set().union(*(d["moduls"] for d in per_persona.values())) if ids else set()
 
     # Tot es mesura quan hi ha, de mitjana, una tasca finalitzada per persona.
@@ -165,13 +140,6 @@ def calcula(membres, finalitzades, moduls_projecte, hores_projecte):
     marge = max(1, igual * MARGE)
     menys = max(1, math.ceil(igual - marge))
     mes = math.floor(igual + marge)
-
-    # Hores: el mateix, amb les hores d'una tasca mitjana com a marge mínim.
-    hores = [per_persona[pk]["hores"] for pk in ids]
-    igual_h = total_hores / mida if mida else 0
-    marge_h = max(total_hores / total if total else 0, igual_h * MARGE)
-    menys_h = max(0.0, igual_h - marge_h)
-    mes_h = igual_h + marge_h
 
     cobertura = [
         len(per_persona[pk]["moduls"]) / len(moduls_equip) if moduls_equip else 0
@@ -201,17 +169,9 @@ def calcula(membres, finalitzades, moduls_projecte, hores_projecte):
             minim(comptes) >= menys,
             "Qui menys: {} (mínim {})".format(_tasques(minim(comptes)), menys),
         ),
-        "tothom_hores": mesura(
-            minim(hores) > 0 and minim(hores) >= menys_h,
-            "Qui menys: {} (mínim {})".format(_hores(minim(hores)), _hores(menys_h)),
-        ),
         "repartida_tasques": mesura(
             maxim(comptes) <= mes,
             "Qui més: {} (màxim {})".format(_tasques(maxim(comptes)), mes),
-        ),
-        "repartida_hores": mesura(
-            maxim(hores) <= mes_h,
-            "Qui més: {} (màxim {})".format(_hores(maxim(hores)), _hores(mes_h)),
         ),
         "polivalents": mesura(
             bool(moduls_equip) and minim(cobertura) >= MIN_COBERTURA_MODULS,
@@ -237,15 +197,10 @@ def calcula(membres, finalitzades, moduls_projecte, hores_projecte):
     no_disponible = {}
     if mida < 2:
         no_disponible["repartida_tasques"] = "equip"
-        no_disponible["repartida_hores"] = "equip"
     if mida < MIN_MEMBRES_REVISIO:
         no_disponible["tothom_revisa"] = "equip_revisio" if mida >= 2 else "equip"
     if moduls_projecte < MIN_MODULS_PROJECTE:
         no_disponible["polivalents"] = "moduls"
-    if not hores_projecte:
-        no_disponible.setdefault("tothom_hores", "hores")
-        no_disponible["repartida_hores"] = no_disponible.get("repartida_hores", "hores")
-
     llista = []
     for definicio in DEFINICIONS:
         insignia = dict(definicio)
@@ -260,21 +215,16 @@ def calcula(membres, finalitzades, moduls_projecte, hores_projecte):
     return llista
 
 
-def de_l_equip(equip, moduls_projecte=None, hores_projecte=None):
+def de_l_equip(equip, moduls_projecte=None):
     """Llegeix de la base de dades el que cal i calcula les insígnies."""
     projecte = equip.projecte
     if moduls_projecte is None:
         moduls_projecte = len(projecte.mps())
-    if hores_projecte is None:
-        hores_projecte = sum(
-            projecte.specs.values_list("hores_estimades", flat=True)
-        )
     membres = set(equip.membres.values_list("pk", flat=True))
     finalitzades = [
         {
             "responsable": tasca.responsable_id,
             "validada_per": tasca.validada_per_id,
-            "hores": tasca.spec.hores_estimades or 0.0,
             "moduls": {mp.pk for mp in tasca.spec.mp.all()},
             "sola": not tasca.colaboradors.all(),
         }
@@ -284,4 +234,4 @@ def de_l_equip(equip, moduls_projecte=None, hores_projecte=None):
         .select_related("spec")
         .prefetch_related("spec__mp", "colaboradors")
     ]
-    return calcula(membres, finalitzades, moduls_projecte, hores_projecte)
+    return calcula(membres, finalitzades, moduls_projecte)

@@ -814,7 +814,8 @@ dialog.modal.fit[open] { height: min(760px, 90vh); }
 .rank-average-key { display: inline-block; width: 3px; height: 14px; margin-right: 8px; vertical-align: -2px; }
 .rank-legend { font-size: 0.86rem; margin: 0; }
 
-.badge-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+/* Narrow enough for the five badges to share one row on a desktop screen. */
+.badge-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); }
 .badge { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); }
 .badge-icon { flex: none; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; font-size: 1.35rem; background: var(--surface-muted); }
 .badge-text { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; font-size: 0.8rem; color: var(--text-muted); }

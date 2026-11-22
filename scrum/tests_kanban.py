@@ -426,6 +426,12 @@ class InsigniesCalculTests(BaseKanban):
     def insignies(self):
         return {i["clau"]: i for i in insignies.de_l_equip(self.equip)}
 
+    def test_son_cinc_insignies(self):
+        self.assertEqual(
+            list(self.insignies()),
+            ["tothom_tasques", "repartida_tasques", "polivalents", "autonomia", "tothom_revisa"],
+        )
+
     def test_no_compten_fins_a_una_tasca_per_persona(self):
         self.finalitza(self.specs[0], self.anna, self.biel)
         dades = self.insignies()
@@ -451,18 +457,6 @@ class InsigniesCalculTests(BaseKanban):
         dades = self.insignies()
         self.assertFalse(dades["tothom_tasques"]["aconseguida"])
         self.assertFalse(dades["repartida_tasques"]["aconseguida"])
-        self.assertFalse(dades["tothom_hores"]["aconseguida"])
-        self.assertFalse(dades["repartida_hores"]["aconseguida"])
-
-    def test_les_hores_poden_dir_una_cosa_diferent_de_les_tasques(self):
-        self.specs[0].hores_estimades = 40
-        self.specs[0].save()
-        ordre = [self.anna, self.biel, self.carla]
-        for index, spec in enumerate(self.specs):
-            self.finalitza(spec, ordre[index % 3], ordre[(index + 1) % 3])
-        dades = self.insignies()
-        self.assertTrue(dades["repartida_tasques"]["aconseguida"])
-        self.assertFalse(dades["repartida_hores"]["aconseguida"])
 
     def test_tothom_revisa_es_perd_si_sempre_valida_la_mateixa_persona(self):
         ordre = [self.anna, self.biel, self.carla]
@@ -483,13 +477,11 @@ class InsigniesCalculTests(BaseKanban):
         dades = self.insignies()
         self.assertTrue(dades["repartida_tasques"]["no_disponible"])
         self.assertEqual(dades["tothom_tasques"]["no_disponible"], "")
-        # Un sol mòdul al projecte i cap hora estimada.
+        # Un sol mòdul al projecte.
         for spec in self.specs:
             spec.mp.set([self.mp1])
-        Spec.objects.filter(projecte=self.projecte).update(hores_estimades=0)
         dades = self.insignies()
         self.assertTrue(dades["polivalents"]["no_disponible"])
-        self.assertTrue(dades["tothom_hores"]["no_disponible"])
 
     def test_qui_deixa_l_equip_no_compta(self):
         ordre = [self.anna, self.biel, self.carla]

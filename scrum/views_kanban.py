@@ -245,7 +245,6 @@ def insignies_projecte(request, projecte_id):
     pot_gestionar = _pot_gestionar(request.user, projecte)
     total_specs = projecte.specs.count()
     moduls_projecte = len(projecte.mps())
-    hores_projecte = sum(projecte.specs.values_list("hores_estimades", flat=True))
     meus = set(
         projecte.equips.filter(membres=request.user).values_list("pk", flat=True)
     )
@@ -257,7 +256,7 @@ def insignies_projecte(request, projecte_id):
         fila.update(
             equip=equip,
             meu=equip.pk in meus,
-            insignies=insignies.de_l_equip(equip, moduls_projecte, hores_projecte),
+            insignies=insignies.de_l_equip(equip, moduls_projecte),
         )
         fila["aconseguides"] = sum(1 for i in fila["insignies"] if i["aconseguida"])
         fila["possibles"] = sum(1 for i in fila["insignies"] if not i["no_disponible"])
